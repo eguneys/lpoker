@@ -73,6 +73,7 @@ export class Check extends BetAction {
 export class DealerAction {}
 
 export class NextBettingRound extends DealerAction {
+  acting_turn_by_stack!: number
 }
 
 export class ShowdownSharePots extends DealerAction {
@@ -353,8 +354,14 @@ export class HeadsUpGame {
     return this.running_round?.dealer_action
   }
 
-  get acting_turn() {
-    return this.running_round?.acting_turn
+  get pots_shared() {
+    return this.running_round?.pots_shared
+  }
+
+  get acting_turn_by_stack() {
+    let { button } = this
+    let next = (button + 1) % 2
+    return this.running_round?.acting_turn === 0 ? button : next
   }
 
   get stack_actions() {
@@ -382,6 +389,7 @@ export class HeadsUpGame {
 
       if (this.dealer_action === NextBettingRound && action instanceof NextBettingRound) {
         this.running_round.next_betting_round()
+        action.acting_turn_by_stack = 1
         return true
       } else if (this.dealer_action === ShowdownSharePots && action instanceof ShowdownSharePots) {
         this.running_round.showdown_share_pots(action)
@@ -420,15 +428,16 @@ export class HeadsUpGame {
   }
 }
 
-export class NewDeal {}
-export class CollectRound {}
+export class GameCreate { constructor(readonly blinds: number) {} }
 
-export type HeadsUpHistoricEvent = BetAction | DealerAction | PotsShared | NewDeal | CollectRound
+export class NewDeal { constructor(readonly acting_turn_by_stack: number) {} }
+
+export type HeadsUpHistoricEvent = BetAction | DealerAction | PotsShared | NewDeal | GameCreate
 
 export class HeadsUpGameTimed {
 
   static make = (blinds: number) => {
-    let res = new HeadsUpGameTimed(HeadsUpGame.make(blinds), [])
+    let res = new HeadsUpGameTimed(HeadsUpGame.make(blinds), [new GameCreate(blinds)])
     return res
   }
 
@@ -443,7 +452,7 @@ export class HeadsUpGameTimed {
 
   start_acting_turn() {
     this.timed_dealer = undefined
-    this.timed_turn = this.game.acting_turn!
+    this.timed_turn = this.game.acting_turn_by_stack!
     this.timestamp = Date.now()
   }
 
@@ -451,7 +460,7 @@ export class HeadsUpGameTimed {
     if (this.game.can_deal) {
       this.game.deal()
       this.start_acting_turn()
-      this.history.push(new NewDeal())
+      this.history.push(new NewDeal(this.game.acting_turn_by_stack))
     }
   }
 
@@ -471,12 +480,84 @@ export class HeadsUpGameTimed {
     if (this.game.try_dealer_action(action)) {
       this.history.push(action)
       if (this.game.can_collect_round) {
+        if (this.game.pots_shared) {
+          this.history.push(this.game.pots_shared)
+        }
         this.game.collect_round()
-        this.history.push(new CollectRound())
       } else if (this.game.stack_actions) {
         this.start_acting_turn()
       }
     }
   }
+}
+
+
+export class HeadsUpGameViewModel {
+
+  static collect_running_actions = 
+    (running_actions?: [Array<BetAction>, Array<BetAction>]) => {
+
+    function collect(actions: Array<BetAction>) {
+      return actions.map(action => action.total).reduce((a, b) => a + b, 0)
+    }
+    if (!running_actions) {
+      return 0
+    }
+
+    return collect(running_actions[0]) + collect(running_actions[1])
+  }
+
+  static replay_history = (history: Array<HeadsUpHistoricEvent>) => {
+    let acc: Array<HeadsUpGameViewModel> = []
+    let last: HeadsUpGameViewModel
+    history.forEach(event => {
+      let now = new HeadsUpGameViewModel()
+      if (event instanceof GameCreate) {
+        now.stacks = [event.blinds * 100, event.blinds * 100]
+        now.pot = 0
+        now.game_create = event
+      } else if (event instanceof NewDeal) {
+        now.stacks = last.stacks
+        now.pot = 0
+        now.new_deal = event
+        now.acting_turn_by_stack = event.acting_turn_by_stack
+      } else if (event instanceof PotsShared) {
+        let share = (event.tie_share ?? event.winner_share)!
+        let side_bets = event.side_bets ?? [0, 0]
+
+        now.stacks = [
+          last.stacks[0] + share[0] + side_bets[0],
+          last.stacks[1] + share[1] + side_bets[1]
+        ]
+        now.pot = 0
+        now.pots_shared = event
+      } else if (event instanceof DealerAction) {
+        now.dealer_action = event
+        now.stacks = last.stacks
+        now.pot = HeadsUpGameViewModel.collect_running_actions(last.running_actions)
+        if (event instanceof NextBettingRound) {
+          now.acting_turn_by_stack = event.acting_turn_by_stack
+        }
+      } else if (event instanceof BetAction) {
+        let running_actions = (last.running_actions ?? [[], []]).slice(0)
+        now.acting_turn_by_stack = (last.acting_turn_by_stack + 1) % 2
+        running_actions[now.acting_turn_by_stack].push(event)
+      }
+
+      last = now
+      acc.push(last)
+    })
+    return acc
+  }
+
+  stacks!: [Chips, Chips]
+  pot!: Chips
+  acting_turn_by_stack!: number
+  running_actions?: [Array<BetAction>, Array<BetAction>]
+  dealer_action?: DealerAction
+  pots_shared?: PotsShared
+
+  new_deal?: NewDeal
+  game_create?: GameCreate
 
 }
