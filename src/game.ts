@@ -100,6 +100,9 @@ export class HeadsUpRound {
   }
 
   get dealer_action() {
+    if (this.pots_shared) {
+      return undefined
+    }
 
     let bets_equal = this.bets[0] === this.bets[1]
     let betting_rounds_settled = bets_equal && this.has_everyone_acted
@@ -130,6 +133,11 @@ export class HeadsUpRound {
   }
 
   get stack_actions() {
+
+    if (this.pots_shared || this.dealer_action) {
+      return undefined
+    }
+
     let res: Array<BetAction> = [Fold.make]
 
     let { acting_turn } = this
@@ -412,11 +420,15 @@ export class HeadsUpGame {
   }
 }
 
+export class NewDeal {}
+export class CollectRound {}
+
+export type HeadsUpHistoricEvent = BetAction | DealerAction | PotsShared | NewDeal | CollectRound
 
 export class HeadsUpGameTimed {
 
-  static make = (game: HeadsUpGame) => {
-    let res = new HeadsUpGameTimed(game)
+  static make = (blinds: number) => {
+    let res = new HeadsUpGameTimed(HeadsUpGame.make(blinds), [])
     return res
   }
 
@@ -425,37 +437,44 @@ export class HeadsUpGameTimed {
 
   timed_dealer?: true
 
-  constructor(readonly game: HeadsUpGame) {
+  constructor(readonly game: HeadsUpGame,
+              readonly history: Array<HeadsUpHistoricEvent>) {
+  }
+
+  start_acting_turn() {
+    this.timed_dealer = undefined
+    this.timed_turn = this.game.acting_turn!
+    this.timestamp = Date.now()
   }
 
   deal() {
     if (this.game.can_deal) {
       this.game.deal()
-      this.timed_dealer = undefined
-      this.timed_turn = this.game.acting_turn!
-      this.timestamp = Date.now()
+      this.start_acting_turn()
+      this.history.push(new NewDeal())
     }
   }
 
   try_stack_action(turn: number, action: BetAction) {
     if (this.game.try_stack_action(turn, action)) {
+      this.history.push(action)
       if (this.game.dealer_action) {
         this.timed_dealer = true
         this.timestamp = Date.now()
       } else if (this.game.stack_actions) {
-        this.timed_turn = this.game.acting_turn!
-        this.timestamp = Date.now()
+        this.start_acting_turn()
       }
     }
   }
 
   try_dealer_action(action: DealerAction) {
     if (this.game.try_dealer_action(action)) {
+      this.history.push(action)
       if (this.game.can_collect_round) {
         this.game.collect_round()
+        this.history.push(new CollectRound())
       } else if (this.game.stack_actions) {
-        this.timed_turn = this.game.acting_turn!
-        this.timestamp = Date.now()
+        this.start_acting_turn()
       }
     }
   }
