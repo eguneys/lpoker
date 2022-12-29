@@ -1,5 +1,11 @@
 export type Chips = number
 
+export class PotsShared {
+  tie_share?: [Chips, Chips]
+  winner_share?: [Chips, Chips]
+  side_bets?: [Chips, Chips]
+}
+
 export type BettingRoundType = 'preflop' | 'flop' | 'turn' | 'river'
 export const next_round_type = {
   'preflop': 'flop',
@@ -46,6 +52,7 @@ export class Raise extends BetAction {
     return res
   }
 }
+
 export class Call extends BetAction {
   static make = (to_call: number) => {
     let res = new Call()
@@ -88,8 +95,6 @@ export class HeadsUpRound {
     res.bets = _bets
     res.has_everyone_acted = false
     res.acting_turn = 0
-    res.pots_shared = false
-    res.side_pot_max_share = [_stacks[0], _stacks[1]]
 
     return res
   }
@@ -178,6 +183,16 @@ export class HeadsUpRound {
 
     this.bets[acting_turn] += _stack
     this.stacks[acting_turn] = 0
+
+
+    let side_bets = this.bets[acting_turn] - this.bets[other_turn]
+
+    if (side_bets > 0) {
+
+      this.bets[acting_turn] -= side_bets
+      this.side_bets = [0, 0]
+      this.side_bets[acting_turn] = side_bets
+    }
   }
 
   call(action: Call) {
@@ -220,28 +235,35 @@ export class HeadsUpRound {
     this.pot += this.bets[1]
     this.bets = [0, 0]
 
-    this.pots_shared = true
+    let pots_shared = new PotsShared()
 
-    let { side_pot_max_share } = this
-
-    let [max_share_one, max_share_two] = side_pot_max_share
-    if (max_share_one !== 0 && max_share_one < this.pot) {
-      let return_to_two = this.pot - max_share_one
-      this.stacks[1] += return_to_two
-      this.pot -= return_to_two
-    } else if (max_share_two !== 0 && max_share_two < this.pot) {
-      let return_to_one = this.pot - max_share_two
-      this.stacks[0] += return_to_one
-      this.pot -= return_to_one
+    if (this.side_bets) {
+      pots_shared.side_bets = [0, 0]
+      if (this.side_bets[0] > 0) {
+        pots_shared.side_bets[0] = this.side_bets[0]
+        this.stacks[0] += this.side_bets[0]
+      }
+      if (this.side_bets[1] > 0) {
+        pots_shared.side_bets[1] = this.side_bets[1]
+        this.stacks[1] += this.side_bets[1]
+      }
     }
+
+
 
     if (action.tie) {
       let share = this.pot / 2
       this.stacks[0] += share
       this.stacks[1] += share
+
+      pots_shared.tie_share = [share, share]
     } else {
+      pots_shared.winner_share = [0, 0]
+      pots_shared.winner_share[action.winner] = this.pot
       this.stacks[action.winner] = this.pot
     }
+
+    this.pots_shared = pots_shared
   }
 
   fold_share_pots() {
@@ -253,16 +275,17 @@ export class HeadsUpRound {
     this.pot += this.bets[1]
     this.bets = [0, 0]
 
-
-    this.pots_shared = true
-
-
     let winner = (this.folded_stack + 1) % 2
 
     this.stacks[winner] = this.pot
+    let pots_shared = new PotsShared()
+    pots_shared.winner_share = [0, 0]
+    pots_shared.winner_share[winner] = this.pot
+
+    this.pots_shared = pots_shared
   }
 
-  side_pot_max_share!: [Chips, Chips]
+  side_bets?: [Chips, Chips]
   pot!: Chips
   bets!: [Chips, Chips]
   round_type!: BettingRoundType
@@ -272,7 +295,7 @@ export class HeadsUpRound {
 
   folded_stack?: number
 
-  pots_shared?: boolean
+  pots_shared?: PotsShared
 
   constructor(readonly stacks: [Chips, Chips], readonly small_blind: number) {}
 }
